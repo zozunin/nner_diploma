@@ -5,8 +5,10 @@ import copy
 import math
 
 
+# Source: https://github.com/foxlf823/sodner/blob/44e51c80cce8c2f62b6896eb963c9c438eb61578/sodner/models/gat.py
+
+
 class GraphConvLayer(nn.Module):
-    """ A GCN module operated on dependency graphs. """
 
     def __init__(self, tree_dropout, mem_dim, layers):
         super(GraphConvLayer, self).__init__()

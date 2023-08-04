@@ -8,9 +8,18 @@ import torch
 class Biaffine(nn.Module):
 
     """
-    На вход получает данные размерности (batch_size, seq_max_len, input_dim) - результаты применения BiLSTM
-    Модуль вычисляет матрицу зависимостей для каждого токена с каждым, возвращает усредненные вектора
+    Биаффинный модуль
+    На вход получает данные размерности (batch_size, seq_max_len, input_dim) - результаты применения BiLSTM 
+    (forward hidden state & backward hidden state)
+    Модуль вычисляет матрицу зависимостей для каждого токена с каждым, возвращает усредненные вектора 
     биаффинного внимания размерности (batch_size, seq_max_len, dep_vec_dim)
+
+    Attributes
+    ----------
+    input_dim : int, required.
+        Размерность последовательности.
+    dep_vec_dim : int, required.
+        Размерность вектора зависимости между словами в матрице.
     """
 
     def __init__(self, input_dim, dep_vec_dim):
@@ -57,6 +66,9 @@ class Biaffine(nn.Module):
     
 
 class MultiHeadAttention(nn.Module):
+    """
+    Модуль многоголового внимания
+    """
     def __init__(self, n_dim: int, n_heads: int):
         super().__init__()
         self.n_heads = n_heads

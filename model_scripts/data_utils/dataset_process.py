@@ -11,10 +11,13 @@ import torch
 
 class dataset(Dataset):
     '''
-    Возвращает закодированную последовательность:
-    индексы
-    маску текста
-    матрицу синтаксической смежности (для AGGCN)
+    Returns
+    -------
+    item : 'dict'
+         * 'input_ids': токенизированное предложение, закодированное id токенов
+         * 'mask': последовательность 0, 1, где 1 - позиции без паддинга
+         * 'adj': матрица синтаксической смежности (для AGGCN)
+         * 'address': указатель на id новости и номер предложения для получения из размеченных данных сущностей и их классов
     '''
     def __init__(self, texts, max_len=256):
 
@@ -86,8 +89,7 @@ def get_ind_sequence(dataframe: pd.DataFrame) -> pd.DataFrame:
 def get_batch_labels(batch_addresses: List, spans_dataset: pd.DataFrame, indices_dataset: pd.DataFrame, span_indices: Tensor,
                      labels2ids: Dict):
     '''
-    Вспомогательная функция для получения последовательности верных меток для отрезков
-    в предложении
+    Вспомогательная функция для получения последовательности верных меток для отрезков в предложении
     '''
 
     batch_size = len(batch_addresses[0])

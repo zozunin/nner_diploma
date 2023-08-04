@@ -4,12 +4,41 @@ from .data_utils.data_eval import Evaluator
 from .loss_func import *
 from tqdm import tqdm
 from torch import nn
+import logging
 import random
 import torch
 
 class GeneralTrainer(nn.Module):
 
-    def __init__(self, model, device, ids2labels, labels2ids, optimizer=None, scheduler=None):
+    """
+    Трейнер для обучения и инференса на общих классах без few-shot экспериментов.
+
+    Attributes
+    ----------
+    model : 'torch.nn.Module', required.
+        Инициализированная модель для обучения/инференса
+    device : str, required.
+        'cuda' или 'cpu'
+    ids2labels : dict, required.
+        Маппинг индексов к меткам классов.
+    labels2ids : dict, required.
+        Маппинг меток классов к числовым обозначениям.
+    val_mode : str, optional (default = 'comb').
+        Режим оценивания работы модели. При инференсе не используется.
+        Доступны варианты:
+            'comb' - оценивает классификатор по всем классам, по умолчанию.
+            'fewshot' - оценивает классификатор только по few-shot классам.
+            'general' - оценивает классификатор только по классам, хорошо
+                        представленным в обучении.
+    logger_path : str, optional (default = None).
+        При логировании в файл требуется указать путь до него.
+    optimizer : 'torch.optim', optional (default = None).
+        Оптимизатор. При инференсе не требуется указание.
+    scheduler : torch.optim.lr_scheduler, optional (default = None).
+        Планировщий. При инференсе не требуется указание.
+    """
+
+    def __init__(self, model, device, ids2labels, labels2ids, val_mode='comb', logger_path=None, optimizer=None, scheduler=None):
 
         super().__init__()
         self.model = model
@@ -21,10 +50,49 @@ class GeneralTrainer(nn.Module):
         self.num_classes = len(ids2labels)
         self.labels2ids = labels2ids    
 
-        self.evaluator = Evaluator(ids2labels)
+        # define Logger
+        logger = logging.getLogger('NNER Model')
+        logger.setLevel(logging.INFO)
 
-    def forward(self, data_loader, labels_dataset, data_indices, mode='train'):
-            
+        format_logger = logging.Formatter(
+            '%(message)s')
+        anyhandler_logger = logging.StreamHandler()
+        if logger_path:
+            anyhandler_logger= logging.FileHandler(logger_path)
+        anyhandler_logger.setFormatter(format_logger)
+        logger.addHandler(anyhandler_logger)
+
+        self.logger = logger
+
+        self.evaluator = Evaluator(ids2labels, self.logger)
+
+        if val_mode not in ['comb', 'fewshot', 'general']:
+            val_mode='comb'
+        self.val_mode = val_mode
+
+    def forward(self, data_loader, data_indices, labels_dataset=None, mode='train'):
+         
+            '''
+            Parameters
+            ----------
+            data_loader : torch DataLoader, required.
+                Данные в батчах.
+            data_indices : pandas.DataFrame, required.
+                Относительные положения токенов в предложении, полученные из разделения с помощью natasha
+                (один ряд в таблице соответствует одному тексту)
+            labels_dataset : pandas.DataFrame, optional (default = None).
+                Позиции именованных сущностей и их классы из тренировочной, валидационной и тестовой выборок.
+            mode : str, optional (default = 'train').
+                Предусмотрены "train" для обучения, "val" для валидации и "infer" для предсказания без оценивания.
+
+            Returns
+            -------
+                float
+                    Общую оценку по f-мере в случае режима train или val.
+                torch.tensor
+                    Предсказания в случае режима infer.
+
+            '''      
             self.predictions = []
             self.true_labels = []
             epoch_f_score = 0
@@ -38,7 +106,7 @@ class GeneralTrainer(nn.Module):
             
             else:
                 self.model.eval()
-
+                
             with grad_regulator():
                 for idx, batch in tqdm(enumerate(data_loader)):
                         if mode == 'train':
@@ -48,24 +116,23 @@ class GeneralTrainer(nn.Module):
                         input_ids = batch['input_ids'].to(self.device)
                         attention_mask = batch['mask'].to(self.device)
                         adj = batch['adj'].to(self.device)
-                        #  predicted, ent_type, span_indices
                         predicted, self.span_indices = self.model(input_ids=input_ids,
                                                                   attention_mask=attention_mask,
                                                                   adj_matrix=adj)
+                        if mode != 'infer':
+                            # get batch labels
+                            batch_addresses = batch['address']
+                            class_labels = get_batch_labels(batch_addresses,
+                                                            labels_dataset,
+                                                            data_indices,
+                                                            self.span_indices[0],
+                                                            self.labels2ids)
+                            class_labels = class_labels.to(self.device)
 
-                        # get batch labels
-                        batch_addresses = batch['address']
-                        class_labels = get_batch_labels(batch_addresses,
-                                                        labels_dataset,
-                                                        data_indices,
-                                                        self.span_indices[0],
-                                                        self.labels2ids)
-                        class_labels = class_labels.to(self.device)
-
-                        self.true_labels += class_labels.tolist()
+                            self.true_labels += class_labels.tolist()
 
                         abs_labels = predicted.max(2).indices # для f_score
-                        self.predictions += abs_labels.tolist() 
+                        self.predictions += abs_labels.tolist()
                         
                         if mode == 'train':
                             # преобразование для вычисления ошибки
@@ -85,15 +152,22 @@ class GeneralTrainer(nn.Module):
                             loss.backward()
                             self.optimizer.step()
                             self.scheduler.step()
+            
+                if mode == 'infer':
+                    return self.predictions
 
-                #logger.info(f'RESULTS FOR MODE {mode.upper()}')     
-                print(f'RESULTS FOR MODE {mode.upper()}')
-                epoch_f_score = self.evaluator.evaluate(self.true_labels, self.predictions)
-                _ = self.evaluator.evaluate(self.true_labels, self.predictions, mode='fewshot')
+                self.logger.info(f'RESULTS FOR MODE {mode.upper()}')
+                if self.val_mode == 'comb':
+                    epoch_f_score = self.evaluator.evaluate(self.true_labels, self.predictions, mode='all_ners')
+                elif self.val_mode == 'fewshot':
+                    epoch_f_score = self.evaluator.evaluate(self.true_labels, self.predictions, mode='fewshot')
+                elif self.val_mode == 'general':
+                    epoch_f_score = self.evaluator.evaluate(self.true_labels, self.predictions, mode='general')   
+                
                 if mode == 'train':
                     epoch_loss = epoch_loss / len(data_loader)
-                    #logger.info(f'Loss per epoch: {epoch_loss}')
-                    print(f'Loss per epoch: {epoch_loss}')
+                    (f'Loss per epoch: {epoch_loss}')
+                    self.logger.info(f'Loss per epoch: {epoch_loss}\n')
 
             return epoch_f_score
     
@@ -101,7 +175,14 @@ class GeneralTrainer(nn.Module):
 
 class FSTrainer(nn.Module):
 
-    def __init__(self, model, device, ids2labels, labels2ids, optimizer=None, scheduler=None, ):
+    """
+    Трейнер для few-shot подзадачи с  использованием Circle Loss
+    Параметры для инициализации и вызова аналогичны GeneralTrainer
+
+    Экспериментальная модель, под инференс не приспособлена
+    """
+
+    def __init__(self, model, device, ids2labels, labels2ids, logger = None, optimizer=None, scheduler=None):
         super().__init__()
         self.model = model
         self.device = device
@@ -112,13 +193,14 @@ class FSTrainer(nn.Module):
         self.num_classes = len(ids2labels)
         self.labels2ids = labels2ids
 
-        self.evaluator = Evaluator(ids2labels)
+        self.evaluator = Evaluator(ids2labels, logger)
+        self.logger = logger
     
     def init_knn(self, X, y, k):
         self.nclassifier = KNeighborsClassifier(n_neighbors=k)
         self.nclassifier.fit(X, y)
 
-    def forward(self, data_loader, labels_dataset, data_indices, mode='train'):
+    def forward(self, data_loader, data_indices, labels_dataset, mode='train'):
 
             epoch_loss = 0
             thres = 0.75
@@ -225,19 +307,22 @@ class FSTrainer(nn.Module):
                             batch_preds = self.nclassifier.predict(span_embeddings[0].tolist())
                             self.true += class_labels[0].tolist()
                             self.preds += batch_preds.tolist()
-
+                
+                if self.logger != None:
+                    logging_prefix = self.logger.info
+                else:
+                    logging_prefix = print
                                 
                 if mode == 'train':
                     epoch_loss = epoch_loss / len(data_loader)
-                    print(f'Loss per epoch: {epoch_loss}')
-                    #logger.info(f'Loss per epoch: {epoch_loss}')
+                    logging_prefix(f'Loss per epoch: {epoch_loss}')
                 elif mode == 'dev':
                     recall = 0 if tp == 0 else tp / (tp+fn)
                     precision = 0 if tp == 0 else tp / (tp+fp)
                     f1 = 0 if precision == 0 else 2.0*recall*precision / (recall+precision)
-                    #logger.info("Mention Recall: {:.5f}%".format(recall * 100))
-                    #logger.info("Mention Precision: {:.5f}%".format(precision * 100))
-                    #logger.info("Mention F1: {:.5f}%".format(f1 * 100))
+                    logging_prefix("Mention Recall: {:.5f}%".format(recall * 100))
+                    logging_prefix("Mention Precision: {:.5f}%".format(precision * 100))
+                    logging_prefix("Mention F1: {:.5f}%".format(f1 * 100))
                 elif mode == 'get_spans':
                     return spans, labels
                 elif mode == 'test':

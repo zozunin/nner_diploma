@@ -19,7 +19,7 @@ class SpanExtractor(nn.Module):
 
     def get_input_dim(self) -> int:
         """
-        Returns the expected final dimension of the `sequence_tensor`.
+        Returns the expected final dimension of the 'sequence_tensor'.
         """
         raise NotImplementedError
 
@@ -39,34 +39,38 @@ class SpanExtractor(nn.Module):
         """
         Функция для извлечение спэнов, получения семантического эмбеддинга и конкатенации
         с эмбеддингом по длине
-        # Parameters
-        sequence_tensor : `torch.FloatTensor`, required.
+        
+        Parameters
+        ----------
+        sequence_tensor : 'torch.FloatTensor', required.
             A tensor of shape (batch_size, sequence_length, embedding_size)
             representing an embedded sequence of words.
-        span_indices : `torch.LongTensor`, required.
-            A tensor of shape `(batch_size, num_spans, 2)`, where the last
+        span_indices : 'torch.LongTensor', required.
+            A tensor of shape '(batch_size, num_spans, 2)', where the last
             dimension represents the inclusive start and end indices of the
-            span to be extracted from the `sequence_tensor`.
-        sequence_mask : `torch.BoolTensor`, optional (default = `None`).
+            span to be extracted from the 'sequence_tensor'.
+        sequence_mask : 'torch.BoolTensor', optional (default = 'None').
             A tensor of shape (batch_size, sequence_length) representing padded
             elements of the sequence.
-        span_indices_mask : `torch.BoolTensor`, optional (default = `None`).
+        span_indices_mask : 'torch.BoolTensor', optional (default = 'None').
             A tensor of shape (batch_size, num_spans) representing the valid
-            spans in the `indices` tensor. This mask is optional because
+            spans in the 'indices' tensor. This mask is optional because
             sometimes it's easier to worry about masking after calling this
             function, rather than passing a mask directly.
-        # Returns
-        A tensor of shape `(batch_size, num_spans, embedded_span_size)`,
-        where `embedded_span_size` depends on the way spans are represented.
+        
+        Returns
+        -------
+        A tensor of shape '(batch_size, num_spans, embedded_span_size)',
+        where 'embedded_span_size' depends on the way spans are represented.
         """
         # shape (batch_size, num_spans, embedding_dim)
         span_embeddings = self._embed_spans(sequence_tensor, span_indices,
                                             adj_matrix,
                                             sequence_mask, span_indices_mask)
         if self._span_width_embedding is not None:
-            # width = end_index - start_index + 1 since `SpanField` use inclusive indices.
+            # width = end_index - start_index + 1 since 'SpanField' use inclusive indices.
             # But here we do not add 1 because we often initiate the span width
-            # embedding matrix with `num_width_embeddings = max_span_width`
+            # embedding matrix with 'num_width_embeddings = max_span_width'
             # shape (batch_size, num_spans)
             widths_minus_one = span_indices[..., 1] - span_indices[..., 0]
 
@@ -91,18 +95,21 @@ class WeightedPoolingSpanExtractor(SpanExtractor):
     Для расчета используется представление каждого слова, входящего 
     в отрезок, а также синтаксическое представление, если 
     выборано использование GCN
-    # Parameters
-    input_dim : `int`, required.
-        The final dimension of the `sequence_tensor`.
-    num_width_embeddings : `int`, optional (default = `None`).
-        Specifies the number of buckets to use when representing
-        span width features.
-    span_width_embedding_dim : `int`, optional (default = `None`).
-        The embedding size for the span_width features.
-    # Returns
-    span_embeddings : `torch.FloatTensor`.
-    A tensor of shape `(batch_size, num_spans, embedded_span_size)`,
-    where `embedded_span_size` depends on the way spans are represented.
+    
+    Parameters
+    ----------
+    input_dim : 'int', required.
+        Размерность полученной последовательности.
+    reduced_dim : 'int', required.
+        Размерность после снижения с помощью линейного слоя. 
+        Стоит учитывать, что при использовании дополнительного эмбеддинга для кодирования ширины отрезка,
+        общая длина представления - сумма reduced_dim и span_width_embedding_dim.
+    num_width_embeddings : 'int', optional (default = None).
+        Число сегментов для представления отрезка по ширине.
+    span_width_embedding_dim : 'int', optional (default = None).
+        Размерность эмбеддинга для кодирования информации о ширине отрезка.
+    use_gcn : 'bool', optional (default = False).
+        Выбор применения графовой сверточной сети по информации о синтаксических зависимостях.
     """
 
     def __init__(
@@ -176,22 +183,31 @@ class WeightedPoolingSpanExtractor(SpanExtractor):
 
 class SelfAttentiveSpanExtractor(SpanExtractor):
     """
-    Вычисляет представления спэнов с помощью генерации оценки внимания для каждого слова
-    в тексте.
-    # Parameters
-    input_dim : `int`, required.
-        The final dimension of the `sequence_tensor`.
-    num_width_embeddings : `int`, optional (default = `None`).
-        Specifies the number of buckets to use when representing
-        span width features.
-    span_width_embedding_dim : `int`, optional (default = `None`).
-        The embedding size for the span_width features.
-    # Returns
-    attended_text_embeddings : `torch.FloatTensor`.
-        A tensor of shape (batch_size, num_spans, input_dim), which each span representation
-        is formed by locally normalising a global attention over the sequence. The only way
-        in which the attention distribution differs over different spans is in the set of words
-        over which they are normalized.
+    Дополнительно контекстуализирует слова с помощью механизма самовнимания.
+    Возможно дополнительное кодирование синтаксической информации с помощью GCN.
+    Финальное представление каждого слова получается с помощью конкатенации
+    эмбеддинга внимания, синтаксического и семантического из BERT, применения
+    линейного слоя для снижения размерности. Представление каждого отрезка
+    получается с помощью применения взвешенного пулинга.
+    
+    Parameters
+    ----------
+    input_dim : 'int', required.
+        Размерность полученной последовательности.
+    reduced_dim : 'int', required.
+        Размерность после снижения с помощью линейного слоя. 
+        Стоит учитывать, что при использовании дополнительного эмбеддинга для кодирования ширины отрезка,
+        общая длина представления - сумма reduced_dim и span_width_embedding_dim.
+    num_width_embeddings : 'int', optional (default = None).
+        Число сегментов для представления отрезка по ширине.
+    span_width_embedding_dim : 'int', optional (default = None).
+        Размерность эмбеддинга для кодирования информации о ширине отрезка.
+    num_heads: 'int', optional (default = 4).
+        Число голов внимания.
+    use_lstm: 'bool', optional (default = False).
+        Требуется ли LSTM для снижения размерности конкатенированных представлений. 
+    use_gcn : 'bool', optional (default = False).
+        Выбор применения графовой сверточной сети по информации о синтаксических зависимостях.
     """
 
     def __init__(
@@ -291,23 +307,25 @@ class SelfAttentiveSpanExtractor(SpanExtractor):
 
 class BiaffineSpanExtractor(SpanExtractor):
     """
-    Дополнительно к BERT кодирует каждое слово с помощью биаффинного механизма
-    В результате вектора зависимостей конкатенируются с семантическими и с 
-    помощью пулинга получается представление спэнов.
-    # Parameters
-    input_dim : `int`, required.
-        The final dimension of the `sequence_tensor`.
-    num_width_embeddings : `int`, optional (default = `None`).
-        Specifies the number of buckets to use when representing
-        span width features.
-    span_width_embedding_dim : `int`, optional (default = `None`).
-        The embedding size for the span_width features.
-    # Returns
-    attended_text_embeddings : `torch.FloatTensor`.
-        A tensor of shape (batch_size, num_spans, input_dim), which each span representation
-        is formed by locally normalising a global attention over the sequence. The only way
-        in which the attention distribution differs over different spans is in the set of words
-        over which they are normalized.
+    Дополнительно к BERT кодирует каждое слово с помощью биаффинного механизма.
+    Опционально использование модуля кодирования синтаксической информации GCN.
+    В результате вектора зависимостей конкатенируются с семантическим представлением из BERT, с 
+    помощью пулинга получается представление отрезка.
+    
+    Parameters
+    ----------
+    input_dim : 'int', required.
+        Размерность получаемой последовательности.
+    reduced_dim : 'int', required.
+        Размерность после снижения с помощью линейного слоя. 
+        Стоит учитывать, что при использовании дополнительного эмбеддинга для кодирования ширины отрезка,
+        общая длина представления - сумма reduced_dim и span_width_embedding_dim.
+    num_width_embeddings : 'int', optional (default = None).
+        Число сегментов для представления отрезка по ширине.
+    span_width_embedding_dim : 'int', optional (default = None).
+        Размерность эмбеддинга для кодирования информации о ширине отрезка.
+    use_gcn : 'bool', optional (default = False).
+        Выбор применения графовой сверточной сети по информации о синтаксических зависимостях.
     """
 
     def __init__(
@@ -401,6 +419,30 @@ class BiaffineSpanExtractor(SpanExtractor):
 
 
 class SelfBiaffineSpanExtractor(SpanExtractor):
+
+    """
+    Для получения представления отрезка используется конкатенация представлений многоголового и биаффиного внимания.
+    Опционально использование синтаксической информации (модуль GCN).
+    В результате эмбеддинги конкатенируются с семантическим представлением из BERT и с 
+    помощью пулинга получается представление отрезков.
+    
+    Parameters
+    ----------
+    input_dim : 'int', required.
+        Размерность получаемой последовательности.
+    reduced_dim : 'int', required.
+        Размерность после снижения с помощью линейного слоя. 
+        Стоит учитывать, что при использовании дополнительного эмбеддинга для кодирования ширины отрезка,
+        общая длина представления - сумма reduced_dim и span_width_embedding_dim.
+    num_width_embeddings : 'int', optional (default = None).
+        Число сегментов для представления отрезка по ширине.
+    span_width_embedding_dim : 'int', optional (default = None).
+        Размерность эмбеддинга для кодирования информации о ширине отрезка.
+    num_heads : 'int', optional (default = 2).
+        Число голов для механизма внимания
+    use_gcn : 'bool', optional (default = False).
+        Выбор применения графовой сверточной сети по информации о синтаксических зависимостях.
+    """
 
     def __init__(
             self,

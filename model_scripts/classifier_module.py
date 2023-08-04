@@ -6,6 +6,19 @@ import torch
 
 class NERTagger(nn.Module):
 
+    '''
+    Модуль классификации полученных отрезков на классы именованных сущностей
+
+    Attributes
+    ----------
+    input_dim : 'int', required.
+        Размерность получаемой последовательности.
+    num_labels: 'int', required.
+        Число классов.
+    ff_dropout: 'float', optional (default = 0.4).
+        Вероятность для Dropout в ff модуле.
+    '''
+
     def __init__(self,
                  input_dim: int,
                  num_labels: int,
